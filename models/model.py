@@ -1,6 +1,6 @@
 from torch import nn, Tensor, Sequential
 from torch.nn import functional as F
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForSequenceClassification
 import torch
 
 class LLM(nn.Module):
@@ -8,49 +8,25 @@ class LLM(nn.Module):
         super().__init__()
         if model_name is None:
             raise ValueError("model_name is required")
-        
         if language not in model_name.keys():
             raise ValueError("language is not supported")
         
-        if language == "en":
-            self.model = AutoModelForCausalLM.from_pretrained(model_name["en"])
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name["en"])
-        elif language == "ch":
-            self.model = AutoModelForCausalLM.from_pretrained(model_name["ch"])
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name["ch"])
-        elif language == "de":
-            self.model = AutoModelForCausalLM.from_pretrained(model_name["de"])
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name["de"])
-            
-        self.feat_size = self.model.config.hidden_size
-        self.n_embed = self.feat_size
+        if model_name in ['llama-3.3-8b-instruct', 'llama-3.3-70b-instruct']:
+            self.model = AutoModelForCausalLM.from_pretrained(model_name)
+        elif model_name in [ 'google/flan-t5-large', 'google/flan-t5-small']:
+            self.model = AutoModelForSequenceClassification.from_pretrained(model_name)    
 
-    def encode(self, x, max_length = 512):
+        self.feat_size = self.model.config.hidden_size
         
-        if isinstance(x, str):
-            x  = [x]
-        elif isinstance(x, list):
-            x = [item for item in x if item is not None]
-        else:
-            raise ValueError("x must be a string or a list of strings")
-        
-        encoding = self.tokenizer(
-            x,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=max_length
-        )
-        return encoding["input_ids"]
     
     def forward(self, x):
         outputs = self.model(x)
         return outputs.last_hidden_state
     
     
-class SpanEmo(nn.Module):
+class MyEmo(nn.Module):
     def __init__(self, output_dropout = 0.1, model_name = None, joint_loss = 'joint', alpha = 0.2):
-        super(SpanEmo, self).__init__()
+        super(MyEmo, self).__init__()
         self.encoder = LLM(model_name)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.joint_loss = joint_loss
@@ -65,31 +41,26 @@ class SpanEmo(nn.Module):
 
     def forward(self, batch):
         # prepare the input
-        inputs, targets,length,label_idxs = batch
-        inputs, num_rows = inputs.to(self.device), inputs.size(0)
-        label_idxs, targets = label_idxs[0].long().to(self.device), targets.float().to(self.device)
-
-        # encode the input
-        encoded_input = self.encoder.encode(inputs.cpu().tolist())  # 确保 inputs 转换为字符串格式
-        encoded_input = encoded_input.to(self.device)
+        inputs_ids, labels, label_idxs = batch
+        labels = labels.to(self.device)
 
         # get the embeddings
-        last_hidden_state = self.encoder(encoded_input)
+        last_hidden_state = self.encoder(inputs_ids)
         
         logits = self.ffn(last_hidden_state).squeeze(-1).index_select(dim=1, index=label_idxs)
-
+        
         # compute the loss
         if self.joint_loss == 'joint':
-            cel_loss = self.corr_loss(logits, targets)
-            bin_loss = F.binary_cross_entropy_with_logits(logits, targets)
+            cel_loss = self.corr_loss(logits, labels)
+            bin_loss = F.binary_cross_entropy_with_logits(logits, labels)
             loss = ((1-self.alpha) * bin_loss) +(self.alpha * cel_loss) 
         elif self.joint_loss == 'cross_entropy':
-            loss = F.binary_cross_entropy_with_logits(logits, targets)
+            loss = F.binary_cross_entropy_with_logits(logits, label s)
         elif self.joint_loss == 'correlation':
-            loss = self.corr_loss(logits, targets)
+            loss = self.corr_loss(logits, labels)
         y_pred = self.compute_predictions(logits)
         
-        return loss, num_rows, y_pred, targets.cpu().numpy()
+        return loss, num_rows, y_pred, labels.cpu().numpy()
         
 
     @staticmethod
