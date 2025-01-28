@@ -1,75 +1,110 @@
+import torch
 from torch.utils.data import Dataset
 import pandas as pd
 from transformers import AutoTokenizer
-import tqdm
+from utils import find_subsequence
 
 class EmoDataset(Dataset):
-    def __init__(self, args, file_path, transform=None):
+    def __init__(self, args):
+        """
+        :param args: dict, 包含以下字段
+          - file_path: 数据文件路径 (CSV)
+          - lang: 'en', 'cn', or 'nl' (根据需要自行扩充)
+          - model_path: HF模型名称/路径 (支持多语言)
+          - max_len: int, tokenizer截断长度
+        """
+        super().__init__()
         self.args = args
-        self.transform = transform
-        self.file_path = file_path
-        self.max_len = args.max_len
-        
-        train_data = pd.read_csv(file_path)
-        self.data = train_data['text'].tolist()
-        
-        if file_path.startswith('eng_train'):
-            self.labels = train_data['joy', 'sadness', 'anger', 'fear', 'suprise'].tolist()
+
+        # 1) 构建分词器
+        self.tokenizer = AutoTokenizer.from_pretrained(args['model_path'])
+
+        self.max_len = args['max_len']
+
+        # 2) 读取数据
+        df = pd.read_csv(args['file_path'])
+        self.texts = df['text'].tolist()
+
+        # 3) 根据语言选择不同的情感标签与对应列
+        if args['lang'] == 'en':
+            # English
+            self.label_matrix = df[['anger','fear','joy','sadness','surprise']].values
+            self.label_names = ['anger','fear','joy','sadness','surprise']
+        elif args['lang'] == 'cn':
+            # Chinese
+            self.label_matrix = df[['anger','disgust','fear','joy','sadness','surprise']].values
+            self.label_names = ['愤怒','厌恶','害怕','高兴','悲伤','惊讶']
         else:
-            self.labels = train_data['joy', 'sadness', 'anger', 'fear', 'disgust', 'suprise'].tolist()
-            
-        self.tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-        self.input_ids, self.input_length, self.lengths, self.label_idxs = self.process()
+            # Dutch
+            self.label_matrix = df[['anger','disgust','fear','joy','sadness','surprise']].values
+            self.label_names = ['woede','walging','angst','vreugde','verdriet','verassing']
+
+        self.tokenizer.add_special_tokens({'additional_special_tokens': 
+                                   [f'[{lab}]' for lab in self.label_names]})
+        
+        # 4) 预处理，得到 input_ids, label_positions, labels
+        self.input_ids, self.label_positions, self.labels = self.process_data()
+
+    def process_data(self):
+        # 分词标签
+        label_subtokens = [
+            self.tokenizer(label, add_special_tokens=False)["input_ids"] for label in self.label_names
+        ]
+
+        # 构造 prompt
+        if self.args['lang'] == 'en':
+            segment_a = "Detect the position of sentiment labels in the following text. Labels: " + " | ".join(self.label_names)
+        elif self.args['lang'] == 'cn':
+            segment_a = "检测情绪标签位置，标签为: " + " | ".join(self.label_names)
+        else:
+            segment_a = "Detecteer de locatie van emotielabels, labels: " + " | ".join(self.label_names)
+
+        all_input_ids = []
+        all_label_positions = []
+        all_labels = []
+
+        # 对每个文本进行处理
+        for i, text in enumerate(self.texts):
+            combined = f"{segment_a}\n{text}"
+            enc = self.tokenizer(
+                combined,
+                max_length=self.max_len,
+                padding='max_length',
+                truncation=True,
+                return_tensors='pt'
+            )
+
+            ids_2d = enc["input_ids"]  # [1, seq_len]
+            ids_1d = ids_2d[0].tolist()
+
+            y = self.label_matrix[i]  # [num_labels]
+            positions_for_sample = []
+
+            # 为该条样本的每个标签找到位置
+            for lab_sub in label_subtokens:
+                start_pos = find_subsequence(ids_1d, lab_sub, self.tokenizer)
+                if start_pos >= 0:
+                    positions_for_sample.append((start_pos, len(lab_sub)))
+                else:
+                    positions_for_sample.append((-1, -1))  # 标记未找到
+
+            all_input_ids.append(ids_1d)
+            all_label_positions.append(positions_for_sample)
+            all_labels.append(y)
+
+        # 转为张量
+        all_input_ids = torch.tensor(all_input_ids, dtype=torch.long)      # [dataset_size, seq_len]
+        all_label_positions = torch.tensor(all_label_positions, dtype=torch.long)  # [dataset_size, num_labels, 2]
+        all_labels = torch.tensor(all_labels, dtype=torch.float)           # [dataset_size, num_labels]
+
+        return all_input_ids, all_label_positions, all_labels
 
     def __len__(self):
-        return len(self.data)
-
+        return len(self.input_ids)
 
     def __getitem__(self, idx):
-        input_ids, label_idxs = 
-        
-        
-
-        return 
-      
-    @staticmethod
-    def process(self, x, max_length = 512):
-        
-        desc = "PreProcessing dataset {}...".format('')
-        
-        if self.args['--lang']=='en':
-            self.segment = 'joy sadness anger fear or suprise'
-            self.labels = ['joy', 'sadness', 'anger', 'fear', 'suprise']
-        elif self.args['--lang']=='ch':
-            self.segment = '高兴 悲伤 愤怒 恐惧 厌恶 或 惊讶'
-            self.labels = ['高兴', '悲伤', '愤怒', '恐惧', '厌恶', '惊讶']
-        elif self.args['--lang']=='de':
-            self.segment = 'freude  traurigkeit  wut  ängstlichkeit  abstoßen  oder  überrascht'
-            self.labels = ['freude', 'traurigkeit', 'wut', 'ängstlichkeit', 'abstoßen', 'überrascht']
-        
-
-        input_ids = [],input_length = [],lengths = []
-        for i in tqdm(self.data, desc = desc):
-            combined_text = f"{self.segment} [SEP] {i}"
-        
-            encoding = self.tokenizer(
-                combined_text,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=max_length
-            )
-            input_id = encoding["input_ids"]
-            input_ids.append(input_id)
-            input_length.append(len(input_id))
-            lengths.append(len(i))
-            
-            label_idxs = []
-            for label in self.labels:
-                tokens = self.tokenizer.convert_ids_to_tokens(input_id)
-                idxs = [tokens.index(label) for label in self.labels if label in tokens]
-                label_idxs.append(idxs)
-            
-            
-        
-        return input_ids, input_length, lengths, label_idxs
+        return (
+            self.input_ids[idx],          # [seq_len]
+            self.labels[idx],             # [num_labels]
+            self.label_positions[idx]     # [num_labels, 2]
+        )
