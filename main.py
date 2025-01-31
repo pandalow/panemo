@@ -1,4 +1,4 @@
-from learner import train
+from train import train
 from config import train_args
 
 
