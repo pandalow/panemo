@@ -11,16 +11,16 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 tokenizer.pad_token = tokenizer.eos_token
 
 def get_training_args(output_dir="./results", quantization_bits=8):
-    gradient_checkpointing = True  # 启用梯度检查点节省显存
+    gradient_checkpointing = True  # enable gradient checkpointing to save memory
 
-    # 选择优化器
+    # choose optimizer
     optim = "adamw_8bit" if quantization_bits in [8, 4] else "adamw_torch"
 
-    # 是否启用 fp16 训练（8-bit 或 4-bit 量化时禁用）
+    # whether to enable fp16 training (disable when 8-bit or 4-bit quantization)
     fp16 = False
     bf16 = False
 
-    # 4-bit 量化需要额外支持
+    # 4-bit need extra support
     load_in_4bit = quantization_bits == 4
     bnb_4bit_compute_dtype = torch.float16 if load_in_4bit else None
     bnb_4bit_quant_type = "nf4" if load_in_4bit else None
@@ -56,16 +56,15 @@ model = CustomModel(model_name=model_name,
 
 train_dataset,dev_dataset,test_dataset = process(config,tokenizer)
 
-
-# 定义 Trainer
+# define Trainer
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=train_dataset,      # 训练数据集
-    eval_dataset=dev_dataset,   # 验证数据集
-    data_collator=custom_data_collator, # 数据收集函数
+    train_dataset=train_dataset,      # train dataset
+    eval_dataset=dev_dataset,   # dev dataset
+    data_collator=custom_data_collator, # data collator
     tokenizer=tokenizer,                # tokenizer
-    compute_metrics=compute_metrics,    # 计算评估指标
+    compute_metrics=compute_metrics,    # compute metrics
 )
 
 trainer.train()

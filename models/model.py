@@ -5,6 +5,7 @@ from transformers import AutoModel
 import bitsandbytes as bnb
 from config import config
 
+
 class CustomModel(nn.Module):
     def __init__(
         self,
@@ -30,20 +31,20 @@ class CustomModel(nn.Module):
             nn.Linear(hidden_size, 512),
             nn.GELU(),
             nn.Linear(512, num_labels)
-        ).to(self.encoder.device)  # 确保 FFN 在相同设备上
+        ).to(self.encoder.device)  # ensure FFN is on the same device
 
 
     def forward(self, input_ids, attention_mask, labels=None):
-        # 量化模型前向传播
+        # quantize model forward propagation
         outputs = self.encoder(
             input_ids=input_ids,
             attention_mask=attention_mask
         )
 
-        # 池化层
+        # pool layer
         last_hidden = outputs.last_hidden_state
         pooled = last_hidden * attention_mask.unsqueeze(-1)
-        pooled = pooled.sum(dim=1) / (attention_mask.sum(dim=1, keepdim=True) + 1e-8)  # 避免除零
+        pooled = pooled.sum(dim=1) / (attention_mask.sum(dim=1, keepdim=True) + 1e-8)  # avoid division by zero
 
         logits = self.fnn(pooled)
 
@@ -55,3 +56,6 @@ class CustomModel(nn.Module):
             )
             return {'loss': loss, 'logits': logits}
         return {'logits': logits}
+
+
+
